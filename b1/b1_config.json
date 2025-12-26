@@ -1,0 +1,44 @@
+{
+  "layout": {
+    "n_poles": 7,
+    "same_col_step_m": 10.0,
+    "stagger_m": 5.0,
+    "lat_gap_m": 2.5
+  },
+  "yolo": {
+    "weights": "../yolov5-master/best.pt",
+    "yolov5_repo": "../yolov5-master",
+    "source": "local",
+    "class_name": "pole",
+    "conf": 0.25,
+    "iou": 0.45,
+    "imgsz": 960
+  },
+  "pole_detector": {
+    "n_poles": 7,
+    "init_secs": 15.0,
+    "frame_stride": 1,
+    "seed": 2025,
+    "kmeans_iters": 60,
+    "min_points_per_pole": 15,
+    "max_mad_px": 18.0,
+    "window_mode": "custom",
+    "start_sec": 5.0,
+    "sample_secs": 10.0
+  },
+  "layout_fitter": {
+    "ransac_th_px": 3.0,
+    "topk_candidates": 40,
+    "try_reverse": true,
+    "try_swap_columns": true
+  },
+  "multicam_resolver": {
+    "topk_single": 40,
+    "ransac_th_px": 3.0,
+    "coverage_penalty_m": 0.15,
+    "shared_consistency_w": 0.3,
+    "min_coverage": 4,
+    "cam1_role": "start",
+    "cam2_role": "end"
+  }
+}
