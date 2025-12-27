@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 from dataclasses import dataclass
 from typing import Dict, Tuple, List, Optional
 
@@ -10,10 +12,10 @@ import cv2
 import numpy as np
 
 from b1_config import load_b1_config
-from pole_detector import YoloV5, PoleDetector, PoleSetPx
+from pole_detector import PoleDetections, PoleDetector, YoloV5
 
 from candidate_generator import CamObs, LayoutSpec
-from multicam_resolver import solve_two_cam, JointSolution
+from multicam_resolver import MultiCamResult, solve_two_cam
 
 
 # -----------------------------
@@ -21,10 +23,11 @@ from multicam_resolver import solve_two_cam, JointSolution
 # -----------------------------
 @dataclass(frozen=True)
 class B1RunResult:
-    poles_cam1: PoleSetPx
-    poles_cam2: PoleSetPx
-    joint: JointSolution
+    poles_cam1: PoleDetections
+    poles_cam2: PoleDetections
+    joint: MultiCamResult
     layout: LayoutSpec
+    metrics: Optional[dict] = None
 
 
 # -----------------------------
@@ -256,43 +259,132 @@ def run_b1(cfg_path: str, cam1_video: str, cam2_video: str) -> B1RunResult:
     poles2 = det.run(cam2_video)
 
     # 2) build obs for new pipeline
-    obs1 = CamObs(cam_id="cam1", role="start",
-                  poles_px=poles1.poles_px_ordered,
-                  pole_area=poles1.pole_area_ordered)
-    obs2 = CamObs(cam_id="cam2", role="end",
-                  poles_px=poles2.poles_px_ordered,
-                  pole_area=poles2.pole_area_ordered)
+    obs1 = CamObs(
+        cam_id="cam1",
+        role="start",
+        poles_px=poles1.poles_px,
+        area=poles1.pole_area,
+        count=poles1.pole_count,
+        mad_px=poles1.pole_spread_mad_px,
+        meta=poles1.meta,
+    )
+    obs2 = CamObs(
+        cam_id="cam2",
+        role="end",
+        poles_px=poles2.poles_px,
+        area=poles2.pole_area,
+        count=poles2.pole_count,
+        mad_px=poles2.pole_spread_mad_px,
+        meta=poles2.meta,
+    )
 
     layout = _layout_from_cfg(cfg)
     topk, thpx = _solver_params_from_cfg(cfg)
 
     # 3) joint solve
-    joint = solve_two_cam(obs1, obs2, layout, topk_candidates=topk, ransac_th_px=thpx)
+    joint, dbg = solve_two_cam(
+        obs1,
+        obs2,
+        layout,
+        topk_candidates=topk,
+        ransac_th_px=thpx,
+        return_debug=True,
+    )
 
-    return B1RunResult(poles_cam1=poles1, poles_cam2=poles2, joint=joint, layout=layout)
+    return B1RunResult(
+        poles_cam1=poles1,
+        poles_cam2=poles2,
+        joint=joint,
+        layout=layout,
+        metrics=dbg,
+    )
 
 
 def _print_summary(res: B1RunResult) -> None:
-    j = res.joint
+    j = res.metrics or {}
     print("\n========== B1 Summary (NEW) ==========")
-    print("coverage:", f"{j.coverage}/7", "union:", j.union_ids)
-    print("shared  :", j.shared_count, "ids:", j.shared_ids,
-          f"mean={j.shared_world_err_mean_m:.4f}m", f"max={j.shared_world_err_max_m:.4f}m")
-    print("joint_score:", f"{j.joint_score:.4f}")
+    cov = j.get("coverage", "?")
+    union_ids = j.get("union_ids", [])
+    shared_ids = j.get("shared_ids", [])
+    shared_mean = j.get("shared_mean_err_m", 0.0)
+    shared_max = j.get("shared_max_err_m", 0.0)
+    joint_score = j.get("best_joint_score", 0.0)
+    print("coverage:", f"{cov}/7", "union:", union_ids)
+    print("shared  :", j.get("shared_count", 0), "ids:", shared_ids,
+          f"mean={shared_mean:.4f}m", f"max={shared_max:.4f}m")
+    print("joint_score:", f"{joint_score:.4f}")
+
+    cam1_dbg = (j.get("cam1") or {})
+    cam2_dbg = (j.get("cam2") or {})
 
     print("\n--- cam1 ---")
-    print("ids_in_obs_order:", j.cam1.candidate.pole_ids_in_obs_order)
-    print("present:", j.cam1.present_ids, "missing:", j.cam1.missing_ids)
-    print("reproj :", f"mean={j.cam1.fit.reproj_mean_m:.4f}m max={j.cam1.fit.reproj_max_m:.4f}m",
-          f"(px mean={j.cam1.fit.reproj_mean_px:.2f} max={j.cam1.fit.reproj_max_px:.2f})",
-          f"inliers={j.cam1.fit.inliers}/{j.cam1.fit.total}")
+    print("ids_in_obs_order:", cam1_dbg.get("cand_ids_in_obs_order", []))
+    print("missing:", cam1_dbg.get("missing_ids", []))
+    print("reproj :",
+          f"mean={cam1_dbg.get('reproj_mean_m', 0.0):.4f}m max={cam1_dbg.get('reproj_max_m', 0.0):.4f}m",
+          f"(px mean={cam1_dbg.get('reproj_mean_px', 0.0):.2f} max={cam1_dbg.get('reproj_max_px', 0.0):.2f})",
+          f"inliers={cam1_dbg.get('inliers', 0)}/{cam1_dbg.get('total_corr', 0)}")
 
     print("\n--- cam2 ---")
-    print("ids_in_obs_order:", j.cam2.candidate.pole_ids_in_obs_order)
-    print("present:", j.cam2.present_ids, "missing:", j.cam2.missing_ids)
-    print("reproj :", f"mean={j.cam2.fit.reproj_mean_m:.4f}m max={j.cam2.fit.reproj_max_m:.4f}m",
-          f"(px mean={j.cam2.fit.reproj_mean_px:.2f} max={j.cam2.fit.reproj_max_px:.2f})",
-          f"inliers={j.cam2.fit.inliers}/{j.cam2.fit.total}")
+    print("ids_in_obs_order:", cam2_dbg.get("cand_ids_in_obs_order", []))
+    print("missing:", cam2_dbg.get("missing_ids", []))
+    print("reproj :",
+          f"mean={cam2_dbg.get('reproj_mean_m', 0.0):.4f}m max={cam2_dbg.get('reproj_max_m', 0.0):.4f}m",
+          f"(px mean={cam2_dbg.get('reproj_mean_px', 0.0):.2f} max={cam2_dbg.get('reproj_max_px', 0.0):.2f})",
+          f"inliers={cam2_dbg.get('inliers', 0)}/{cam2_dbg.get('total_corr', 0)}")
+
+
+def _write_b1_result_json(res: B1RunResult, run_id: str, out_root: str = "outputs") -> str:
+    os.makedirs(out_root, exist_ok=True)
+    out_dir = os.path.join(out_root, str(run_id), "b1")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "b1_result.json")
+
+    world_def = {
+        "unit": "meter",
+        "x_origin": "P1",
+        "x_increase_rule": "x(pid)=(pid-1)*stagger_m along track",
+        "y_center": 0.0,
+        "columns_y": [
+            -0.5 * float(res.layout.lat_gap_m),
+            +0.5 * float(res.layout.lat_gap_m),
+        ],
+    }
+
+    def _cam_to_dict(cam) -> dict:
+        poles_px = {str(pid): [float(v[0]), float(v[1])] for pid, v in cam.poles_px.items()}
+        observed_px = {str(pid): [float(v[0]), float(v[1])] for pid, v in cam.observed_px.items()}
+        return {
+            "cam_id": cam.cam_id,
+            "role": cam.role,
+            "H_p2w": cam.H_p2w.astype(float).tolist(),
+            "H_w2p": cam.H_w2p.astype(float).tolist(),
+            "poles_px": poles_px,
+            "observed_px": observed_px,
+        }
+
+    out_json = {
+        "schema_version": "b1_result_v1",
+        "run_id": str(run_id),
+        "layout": {
+            "n_poles": int(res.layout.n_poles),
+            "stagger_m": float(res.layout.stagger_m),
+            "lat_gap_m": float(res.layout.lat_gap_m),
+        },
+        "world_def": world_def,
+        "cameras": {
+            "cam1": _cam_to_dict(res.joint.cam1),
+            "cam2": _cam_to_dict(res.joint.cam2),
+        },
+    }
+
+    if res.metrics:
+        out_json["metrics"] = res.metrics
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(out_json, f, ensure_ascii=False, indent=2)
+
+    return out_path
 
 
 # -----------------------------
@@ -303,16 +395,37 @@ if __name__ == "__main__":
     ap.add_argument("--cfg", type=str, default="b1_config.json")
     ap.add_argument("--cam1", type=str, default=r"..\正常跑1 20.6s\正常跑前视角-1.mp4")
     ap.add_argument("--cam2", type=str, default=r"..\正常跑1 20.6s\正常跑后视角.mp4")
+    ap.add_argument("--run-id", type=str, default="demo", help="run identifier for saving outputs")
+    ap.add_argument("--out-root", type=str, default="outputs", help="root dir for outputs")
     ap.add_argument("--show", action="store_true", help="show a 3-panel joint visualization (no saving)")
     args = ap.parse_args()
 
     res = run_b1(args.cfg, args.cam1, args.cam2)
     _print_summary(res)
 
+    out_path = _write_b1_result_json(res, run_id=args.run_id, out_root=args.out_root)
+    print(f"\nB1 result written to: {out_path}")
+
     if args.show:
         # Rebuild obs for drawing (same as run_b1)
-        cam1_obs = CamObs("cam1", "start", res.poles_cam1.poles_px_ordered, res.poles_cam1.pole_area_ordered)
-        cam2_obs = CamObs("cam2", "end", res.poles_cam2.poles_px_ordered, res.poles_cam2.pole_area_ordered)
+        cam1_obs = CamObs(
+            "cam1",
+            "start",
+            res.poles_cam1.poles_px,
+            area=res.poles_cam1.pole_area,
+            count=res.poles_cam1.pole_count,
+            mad_px=res.poles_cam1.pole_spread_mad_px,
+            meta=res.poles_cam1.meta,
+        )
+        cam2_obs = CamObs(
+            "cam2",
+            "end",
+            res.poles_cam2.poles_px,
+            area=res.poles_cam2.pole_area,
+            count=res.poles_cam2.pole_count,
+            mad_px=res.poles_cam2.pole_spread_mad_px,
+            meta=res.poles_cam2.meta,
+        )
 
         ok1, f1 = _read_first_frame(args.cam1)
         ok2, f2 = _read_first_frame(args.cam2)
