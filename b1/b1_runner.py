@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from b1_config import load_b1_config
-from pole_detector import YoloV5, PoleDetector, PoleSetPx
+from pole_detector import PoleDetections, PoleDetector, YoloV5
 
 from candidate_generator import CamObs, LayoutSpec
 from multicam_resolver import MultiCamResult, solve_two_cam
@@ -23,11 +23,10 @@ from multicam_resolver import MultiCamResult, solve_two_cam
 # -----------------------------
 @dataclass(frozen=True)
 class B1RunResult:
-    poles_cam1: PoleSetPx
-    poles_cam2: PoleSetPx
-    joint: MultiCamResult
-    layout: LayoutSpec
-    metrics: Optional[dict] = None
+
+    poles_cam1: PoleDetections
+    poles_cam2: PoleDetections
+
 
 
 # -----------------------------
@@ -260,11 +259,11 @@ def run_b1(cfg_path: str, cam1_video: str, cam2_video: str) -> B1RunResult:
 
     # 2) build obs for new pipeline
     obs1 = CamObs(cam_id="cam1", role="start",
-                  poles_px=poles1.poles_px_ordered,
-                  pole_area=poles1.pole_area_ordered)
+                  poles_px=poles1.poles_px,
+                  pole_area=poles1.pole_area)
     obs2 = CamObs(cam_id="cam2", role="end",
-                  poles_px=poles2.poles_px_ordered,
-                  pole_area=poles2.pole_area_ordered)
+                  poles_px=poles2.poles_px,
+                  pole_area=poles2.pole_area)
 
     layout = _layout_from_cfg(cfg)
     topk, thpx = _solver_params_from_cfg(cfg)
@@ -396,8 +395,8 @@ if __name__ == "__main__":
 
     if args.show:
         # Rebuild obs for drawing (same as run_b1)
-        cam1_obs = CamObs("cam1", "start", res.poles_cam1.poles_px_ordered, res.poles_cam1.pole_area_ordered)
-        cam2_obs = CamObs("cam2", "end", res.poles_cam2.poles_px_ordered, res.poles_cam2.pole_area_ordered)
+        cam1_obs = CamObs("cam1", "start", res.poles_cam1.poles_px, res.poles_cam1.pole_area)
+        cam2_obs = CamObs("cam2", "end", res.poles_cam2.poles_px, res.poles_cam2.pole_area)
 
         ok1, f1 = _read_first_frame(args.cam1)
         ok2, f2 = _read_first_frame(args.cam2)
