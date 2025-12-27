@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 from dataclasses import dataclass
 from typing import Dict, Tuple, List, Optional
 
@@ -10,10 +12,10 @@ import cv2
 import numpy as np
 
 from b1_config import load_b1_config
-from pole_detector import YoloV5, PoleDetector, PoleSetPx
+from pole_detector import PoleDetections, PoleDetector, YoloV5
 
 from candidate_generator import CamObs, LayoutSpec
-from multicam_resolver import solve_two_cam, JointSolution
+from multicam_resolver import MultiCamResult, solve_two_cam
 
 
 # -----------------------------
@@ -21,10 +23,11 @@ from multicam_resolver import solve_two_cam, JointSolution
 # -----------------------------
 @dataclass(frozen=True)
 class B1RunResult:
-    poles_cam1: PoleSetPx
-    poles_cam2: PoleSetPx
-    joint: JointSolution
+    poles_cam1: PoleDetections
+    poles_cam2: PoleDetections
+    joint: MultiCamResult
     layout: LayoutSpec
+    metrics: Optional[dict] = None
 
 
 # -----------------------------
@@ -54,54 +57,36 @@ def _read_first_frame(video_path: str):
 # -----------------------------
 def _draw_joint_on_cam(
     frame_bgr: np.ndarray,
-    obs: CamObs,
-    joint_cam_sol,   # JointSolution.cam1 or cam2 (CamSolution)
+    cam_res,
     color_obs=(0, 255, 0),
     color_miss=(0, 0, 255),
 ) -> None:
     """
-    Draw final JOINT result on this camera frame:
+    Draw final joint result on this camera frame using the resolved CameraCalibResult:
 
-    - Observed + inlier: draw at observed pixel (green circle + Pid)
-    - Missing: draw predicted pixel from homography projection (red cross + Pid)
-    - Outlier obs: skip (avoid "floating points")
+    - Observed pid: green circle + label
+    - Missing pid: red cross + label
     """
     h, w = frame_bgr.shape[:2]
 
-    cand = joint_cam_sol.candidate
-    fit = joint_cam_sol.fit
-
-    # 1) draw observed inliers at obs pixels
-    for i, (px, pid) in enumerate(zip(obs.poles_px, cand.pole_ids_in_obs_order)):
-        pid = int(pid)
-        if pid <= 0:
-            continue
-        if i >= len(fit.inlier_mask_obs) or (not fit.inlier_mask_obs[i]):
-            continue  # skip outliers
-
-        x, y = float(px[0]), float(px[1])
+    for pid in sorted(cam_res.poles_px.keys()):
+        x, y = cam_res.poles_px[pid]
         if not _in_bounds(x, y, w, h):
             continue
 
         xi, yi = int(round(x)), int(round(y))
-        cv2.circle(frame_bgr, (xi, yi), 7, color_obs, -1)
-        cv2.putText(frame_bgr, f"P{pid}", (xi + 10, yi - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, color_obs, 2, cv2.LINE_AA)
+        if pid in cam_res.observed_px:
+            cv2.circle(frame_bgr, (xi, yi), 7, color_obs, -1)
+            cv2.putText(frame_bgr, f"P{pid}", (xi + 10, yi - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, color_obs, 2, cv2.LINE_AA)
+        else:
+            cv2.drawMarker(frame_bgr, (xi, yi), color_miss, markerType=cv2.MARKER_TILTED_CROSS,
+                           markerSize=18, thickness=2, line_type=cv2.LINE_AA)
+            cv2.putText(frame_bgr, f"P{pid}", (xi + 10, yi - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, color_miss, 2, cv2.LINE_AA)
 
-    # 2) draw missing as predicted pixels (template -> pixel via H_w2p)
-    for pid, (x, y) in joint_cam_sol.pred_px_missing.items():
-        x, y = float(x), float(y)
-        if not _in_bounds(x, y, w, h):
-            continue
-        xi, yi = int(round(x)), int(round(y))
-        cv2.drawMarker(frame_bgr, (xi, yi), color_miss, markerType=cv2.MARKER_TILTED_CROSS,
-                       markerSize=18, thickness=2, line_type=cv2.LINE_AA)
-        cv2.putText(frame_bgr, f"P{int(pid)}", (xi + 10, yi - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, color_miss, 2, cv2.LINE_AA)
-
-    # header line
     cv2.putText(frame_bgr,
-                f"{obs.cam_id} (green=inlier obs, red=missing)  inliers={joint_cam_sol.fit.inliers}/{joint_cam_sol.fit.total}",
+                f"{cam_res.cam_id} (green=observed, red=missing)",
                 (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (20, 20, 20), 2, cv2.LINE_AA)
 
 
@@ -110,9 +95,8 @@ def _draw_joint_on_cam(
 # -----------------------------
 def _render_joint_bev(
     layout: LayoutSpec,
-    joint: JointSolution,
-    cam1_obs: CamObs,
-    cam2_obs: CamObs,
+    cam1_res,
+    cam2_res,
     width: int = 700,
     height: int = 540,
     ppm: float = 18.0,
@@ -142,24 +126,15 @@ def _render_joint_bev(
         cv2.putText(img, f"P{pid}", (u + 10, v - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 0), 2, cv2.LINE_AA)
 
-    # cam points in world (use inlier obs only)
-    def pid_world_map(obs: CamObs, sol) -> Dict[int, np.ndarray]:
+    def pid_world_map(cam_res) -> Dict[int, np.ndarray]:
         out: Dict[int, np.ndarray] = {}
-        cand = sol.candidate
-        fit = sol.fit
-        for i, pid in enumerate(cand.pole_ids_in_obs_order):
-            pid = int(pid)
-            if pid <= 0:
-                continue
-            if i >= len(fit.inlier_mask_obs) or (not fit.inlier_mask_obs[i]):
-                continue
-            px = np.asarray([obs.poles_px[i]], np.float32)
-            wxy = _apply_H(fit.H_p2w, px)[0]
-            out[pid] = wxy
+        for pid, px in cam_res.observed_px.items():
+            wxy = _apply_H(cam_res.H_p2w, np.asarray([px], np.float32))[0]
+            out[int(pid)] = wxy
         return out
 
-    d1 = pid_world_map(cam1_obs, joint.cam1)
-    d2 = pid_world_map(cam2_obs, joint.cam2)
+    d1 = pid_world_map(cam1_res)
+    d2 = pid_world_map(cam2_res)
 
     # draw cam1 points (green-ish)
     for pid, wxy in d1.items():
@@ -179,13 +154,14 @@ def _render_joint_bev(
         cv2.line(img, (u1, v1), (u2, v2), (0, 160, 200), 2, cv2.LINE_AA)
 
     # title
+    coverage = len(set(d1.keys()) | set(d2.keys()))
     cv2.putText(img, "Joint BEV (canonical world)", (12, 32),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (30, 30, 30), 2, cv2.LINE_AA)
-    cv2.putText(img, f"coverage={joint.coverage}/7 union={joint.union_ids}", (12, 62),
+    cv2.putText(img, f"coverage={coverage}/7", (12, 62),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.75, (40, 40, 40), 2, cv2.LINE_AA)
     cv2.putText(img,
-                f"shared={joint.shared_count} mean={joint.shared_world_err_mean_m:.3f}m max={joint.shared_world_err_max_m:.3f}m",
-                (12, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (40, 40, 40), 2, cv2.LINE_AA)
+                f"shared={len(shared)}", (12, 90),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.70, (40, 40, 40), 2, cv2.LINE_AA)
 
     # legend
     cv2.circle(img, (20, height - 70), 6, (0, 180, 0), -1)
@@ -225,7 +201,7 @@ def _layout_from_cfg(cfg) -> LayoutSpec:
         )
 
     # LayoutSpec.step_x 就是 P1->P2 的步长（等于 stagger_m）
-    return LayoutSpec(n_poles=n_poles, step_x=stagger, lat_gap=lat_gap)
+    return LayoutSpec(n_poles=n_poles, stagger_m=stagger, lat_gap_m=lat_gap)
 
 
 def _solver_params_from_cfg(cfg) -> tuple[int, float]:
@@ -256,43 +232,132 @@ def run_b1(cfg_path: str, cam1_video: str, cam2_video: str) -> B1RunResult:
     poles2 = det.run(cam2_video)
 
     # 2) build obs for new pipeline
-    obs1 = CamObs(cam_id="cam1", role="start",
-                  poles_px=poles1.poles_px_ordered,
-                  pole_area=poles1.pole_area_ordered)
-    obs2 = CamObs(cam_id="cam2", role="end",
-                  poles_px=poles2.poles_px_ordered,
-                  pole_area=poles2.pole_area_ordered)
+    obs1 = CamObs(
+        cam_id="cam1",
+        role="start",
+        poles_px=poles1.poles_px,
+        area=poles1.pole_area,
+        count=poles1.pole_count,
+        mad_px=poles1.pole_spread_mad_px,
+        meta=poles1.meta,
+    )
+    obs2 = CamObs(
+        cam_id="cam2",
+        role="end",
+        poles_px=poles2.poles_px,
+        area=poles2.pole_area,
+        count=poles2.pole_count,
+        mad_px=poles2.pole_spread_mad_px,
+        meta=poles2.meta,
+    )
 
     layout = _layout_from_cfg(cfg)
     topk, thpx = _solver_params_from_cfg(cfg)
 
     # 3) joint solve
-    joint = solve_two_cam(obs1, obs2, layout, topk_candidates=topk, ransac_th_px=thpx)
+    joint, dbg = solve_two_cam(
+        obs1,
+        obs2,
+        layout,
+        topk_candidates=topk,
+        ransac_th_px=thpx,
+        return_debug=True,
+    )
 
-    return B1RunResult(poles_cam1=poles1, poles_cam2=poles2, joint=joint, layout=layout)
+    return B1RunResult(
+        poles_cam1=poles1,
+        poles_cam2=poles2,
+        joint=joint,
+        layout=layout,
+        metrics=dbg,
+    )
 
 
 def _print_summary(res: B1RunResult) -> None:
-    j = res.joint
+    j = res.metrics or {}
     print("\n========== B1 Summary (NEW) ==========")
-    print("coverage:", f"{j.coverage}/7", "union:", j.union_ids)
-    print("shared  :", j.shared_count, "ids:", j.shared_ids,
-          f"mean={j.shared_world_err_mean_m:.4f}m", f"max={j.shared_world_err_max_m:.4f}m")
-    print("joint_score:", f"{j.joint_score:.4f}")
+    cov = j.get("coverage", "?")
+    union_ids = j.get("union_ids", [])
+    shared_ids = j.get("shared_ids", [])
+    shared_mean = j.get("shared_mean_err_m", 0.0)
+    shared_max = j.get("shared_max_err_m", 0.0)
+    joint_score = j.get("best_joint_score", 0.0)
+    print("coverage:", f"{cov}/7", "union:", union_ids)
+    print("shared  :", j.get("shared_count", 0), "ids:", shared_ids,
+          f"mean={shared_mean:.4f}m", f"max={shared_max:.4f}m")
+    print("joint_score:", f"{joint_score:.4f}")
+
+    cam1_dbg = (j.get("cam1") or {})
+    cam2_dbg = (j.get("cam2") or {})
 
     print("\n--- cam1 ---")
-    print("ids_in_obs_order:", j.cam1.candidate.pole_ids_in_obs_order)
-    print("present:", j.cam1.present_ids, "missing:", j.cam1.missing_ids)
-    print("reproj :", f"mean={j.cam1.fit.reproj_mean_m:.4f}m max={j.cam1.fit.reproj_max_m:.4f}m",
-          f"(px mean={j.cam1.fit.reproj_mean_px:.2f} max={j.cam1.fit.reproj_max_px:.2f})",
-          f"inliers={j.cam1.fit.inliers}/{j.cam1.fit.total}")
+    print("ids_in_obs_order:", cam1_dbg.get("cand_ids_in_obs_order", []))
+    print("missing:", cam1_dbg.get("missing_ids", []))
+    print("reproj :",
+          f"mean={cam1_dbg.get('reproj_mean_m', 0.0):.4f}m max={cam1_dbg.get('reproj_max_m', 0.0):.4f}m",
+          f"(px mean={cam1_dbg.get('reproj_mean_px', 0.0):.2f} max={cam1_dbg.get('reproj_max_px', 0.0):.2f})",
+          f"inliers={cam1_dbg.get('inliers', 0)}/{cam1_dbg.get('total_corr', 0)}")
 
     print("\n--- cam2 ---")
-    print("ids_in_obs_order:", j.cam2.candidate.pole_ids_in_obs_order)
-    print("present:", j.cam2.present_ids, "missing:", j.cam2.missing_ids)
-    print("reproj :", f"mean={j.cam2.fit.reproj_mean_m:.4f}m max={j.cam2.fit.reproj_max_m:.4f}m",
-          f"(px mean={j.cam2.fit.reproj_mean_px:.2f} max={j.cam2.fit.reproj_max_px:.2f})",
-          f"inliers={j.cam2.fit.inliers}/{j.cam2.fit.total}")
+    print("ids_in_obs_order:", cam2_dbg.get("cand_ids_in_obs_order", []))
+    print("missing:", cam2_dbg.get("missing_ids", []))
+    print("reproj :",
+          f"mean={cam2_dbg.get('reproj_mean_m', 0.0):.4f}m max={cam2_dbg.get('reproj_max_m', 0.0):.4f}m",
+          f"(px mean={cam2_dbg.get('reproj_mean_px', 0.0):.2f} max={cam2_dbg.get('reproj_max_px', 0.0):.2f})",
+          f"inliers={cam2_dbg.get('inliers', 0)}/{cam2_dbg.get('total_corr', 0)}")
+
+
+def _write_b1_result_json(res: B1RunResult, run_id: str, out_root: str = "outputs") -> str:
+    os.makedirs(out_root, exist_ok=True)
+    out_dir = os.path.join(out_root, str(run_id), "b1")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "b1_result.json")
+
+    world_def = {
+        "unit": "meter",
+        "x_origin": "P1",
+        "x_increase_rule": "x(pid)=(pid-1)*stagger_m along track",
+        "y_center": 0.0,
+        "columns_y": [
+            -0.5 * float(res.layout.lat_gap_m),
+            +0.5 * float(res.layout.lat_gap_m),
+        ],
+    }
+
+    def _cam_to_dict(cam) -> dict:
+        poles_px = {str(pid): [float(v[0]), float(v[1])] for pid, v in cam.poles_px.items()}
+        observed_px = {str(pid): [float(v[0]), float(v[1])] for pid, v in cam.observed_px.items()}
+        return {
+            "cam_id": cam.cam_id,
+            "role": cam.role,
+            "H_p2w": cam.H_p2w.astype(float).tolist(),
+            "H_w2p": cam.H_w2p.astype(float).tolist(),
+            "poles_px": poles_px,
+            "observed_px": observed_px,
+        }
+
+    out_json = {
+        "schema_version": "b1_result_v1",
+        "run_id": str(run_id),
+        "layout": {
+            "n_poles": int(res.layout.n_poles),
+            "stagger_m": float(res.layout.stagger_m),
+            "lat_gap_m": float(res.layout.lat_gap_m),
+        },
+        "world_def": world_def,
+        "cameras": {
+            "cam1": _cam_to_dict(res.joint.cam1),
+            "cam2": _cam_to_dict(res.joint.cam2),
+        },
+    }
+
+    if res.metrics:
+        out_json["metrics"] = res.metrics
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(out_json, f, ensure_ascii=False, indent=2)
+
+    return out_path
 
 
 # -----------------------------
@@ -303,17 +368,18 @@ if __name__ == "__main__":
     ap.add_argument("--cfg", type=str, default="b1_config.json")
     ap.add_argument("--cam1", type=str, default=r"..\正常跑1 20.6s\正常跑前视角-1.mp4")
     ap.add_argument("--cam2", type=str, default=r"..\正常跑1 20.6s\正常跑后视角.mp4")
+    ap.add_argument("--run-id", type=str, default="demo", help="run identifier for saving outputs")
+    ap.add_argument("--out-root", type=str, default="outputs", help="root dir for outputs")
     ap.add_argument("--show", action="store_true", help="show a 3-panel joint visualization (no saving)")
     args = ap.parse_args()
 
     res = run_b1(args.cfg, args.cam1, args.cam2)
     _print_summary(res)
 
-    if args.show:
-        # Rebuild obs for drawing (same as run_b1)
-        cam1_obs = CamObs("cam1", "start", res.poles_cam1.poles_px_ordered, res.poles_cam1.pole_area_ordered)
-        cam2_obs = CamObs("cam2", "end", res.poles_cam2.poles_px_ordered, res.poles_cam2.pole_area_ordered)
+    out_path = _write_b1_result_json(res, run_id=args.run_id, out_root=args.out_root)
+    print(f"\nB1 result written to: {out_path}")
 
+    if args.show:
         ok1, f1 = _read_first_frame(args.cam1)
         ok2, f2 = _read_first_frame(args.cam2)
 
@@ -322,15 +388,15 @@ if __name__ == "__main__":
 
         if ok1:
             vis1 = f1.copy()
-            _draw_joint_on_cam(vis1, cam1_obs, res.joint.cam1)
+            _draw_joint_on_cam(vis1, res.joint.cam1)
             panels.append(vis1)
 
         if ok2:
             vis2 = f2.copy()
-            _draw_joint_on_cam(vis2, cam2_obs, res.joint.cam2)
+            _draw_joint_on_cam(vis2, res.joint.cam2)
             panels.append(vis2)
 
-        bev = _render_joint_bev(res.layout, res.joint, cam1_obs, cam2_obs, width=700, height=540, ppm=18.0)
+        bev = _render_joint_bev(res.layout, res.joint.cam1, res.joint.cam2, width=700, height=540, ppm=18.0)
         panels.append(bev)
 
         resized = []
