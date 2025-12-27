@@ -23,11 +23,10 @@ from multicam_resolver import MultiCamResult, solve_two_cam
 # -----------------------------
 @dataclass(frozen=True)
 class B1RunResult:
+
     poles_cam1: PoleDetections
     poles_cam2: PoleDetections
-    joint: MultiCamResult
-    layout: LayoutSpec
-    metrics: Optional[dict] = None
+
 
 
 # -----------------------------
