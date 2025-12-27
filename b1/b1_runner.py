@@ -23,9 +23,11 @@ from multicam_resolver import MultiCamResult, solve_two_cam
 # -----------------------------
 @dataclass(frozen=True)
 class B1RunResult:
-
     poles_cam1: PoleDetections
     poles_cam2: PoleDetections
+    joint: MultiCamResult
+    layout: LayoutSpec
+    metrics: Optional[dict] = None
 
 
 
@@ -258,12 +260,24 @@ def run_b1(cfg_path: str, cam1_video: str, cam2_video: str) -> B1RunResult:
     poles2 = det.run(cam2_video)
 
     # 2) build obs for new pipeline
-    obs1 = CamObs(cam_id="cam1", role="start",
-                  poles_px=poles1.poles_px,
-                  pole_area=poles1.pole_area)
-    obs2 = CamObs(cam_id="cam2", role="end",
-                  poles_px=poles2.poles_px,
-                  pole_area=poles2.pole_area)
+    obs1 = CamObs(
+        cam_id="cam1",
+        role="start",
+        poles_px=poles1.poles_px,
+        area=poles1.pole_area,
+        count=poles1.pole_count,
+        mad_px=poles1.pole_spread_mad_px,
+        meta=poles1.meta,
+    )
+    obs2 = CamObs(
+        cam_id="cam2",
+        role="end",
+        poles_px=poles2.poles_px,
+        area=poles2.pole_area,
+        count=poles2.pole_count,
+        mad_px=poles2.pole_spread_mad_px,
+        meta=poles2.meta,
+    )
 
     layout = _layout_from_cfg(cfg)
     topk, thpx = _solver_params_from_cfg(cfg)
@@ -395,8 +409,24 @@ if __name__ == "__main__":
 
     if args.show:
         # Rebuild obs for drawing (same as run_b1)
-        cam1_obs = CamObs("cam1", "start", res.poles_cam1.poles_px, res.poles_cam1.pole_area)
-        cam2_obs = CamObs("cam2", "end", res.poles_cam2.poles_px, res.poles_cam2.pole_area)
+        cam1_obs = CamObs(
+            "cam1",
+            "start",
+            res.poles_cam1.poles_px,
+            area=res.poles_cam1.pole_area,
+            count=res.poles_cam1.pole_count,
+            mad_px=res.poles_cam1.pole_spread_mad_px,
+            meta=res.poles_cam1.meta,
+        )
+        cam2_obs = CamObs(
+            "cam2",
+            "end",
+            res.poles_cam2.poles_px,
+            area=res.poles_cam2.pole_area,
+            count=res.poles_cam2.pole_count,
+            mad_px=res.poles_cam2.pole_spread_mad_px,
+            meta=res.poles_cam2.meta,
+        )
 
         ok1, f1 = _read_first_frame(args.cam1)
         ok2, f2 = _read_first_frame(args.cam2)
