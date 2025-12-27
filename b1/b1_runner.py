@@ -30,7 +30,6 @@ class B1RunResult:
     metrics: Optional[dict] = None
 
 
-
 # -----------------------------
 # Small helpers
 # -----------------------------
@@ -229,7 +228,7 @@ def _layout_from_cfg(cfg) -> LayoutSpec:
         )
 
     # LayoutSpec.step_x 就是 P1->P2 的步长（等于 stagger_m）
-    return LayoutSpec(n_poles=n_poles, step_x=stagger, lat_gap=lat_gap)
+    return LayoutSpec(n_poles=n_poles, stagger_m=stagger, lat_gap_m=lat_gap)
 
 
 def _solver_params_from_cfg(cfg) -> tuple[int, float]:
