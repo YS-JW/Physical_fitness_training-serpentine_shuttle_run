@@ -17,7 +17,7 @@ def _color_tuple(c):
     return (0, 0, 0)
 
 
-def draw_grid_overlay(out_path: str, layout: Dict[str, Any], grid_cfg: B2GridConfig, bev_grid: Dict[str, Any]) -> None:
+def _render_grid_image(layout: Dict[str, Any], grid_cfg: B2GridConfig, bev_grid: Dict[str, Any]) -> np.ndarray:
     size = bev_grid["canvas_size_px"]
     W2G = np.asarray(bev_grid["W2G"], np.float32)
     img = np.full((int(size["height"]), int(size["width"]), 3), grid_cfg.style.background, np.uint8)
@@ -90,6 +90,11 @@ def draw_grid_overlay(out_path: str, layout: Dict[str, Any], grid_cfg: B2GridCon
             cv2.LINE_AA,
         )
 
+    return img
+
+
+def draw_grid_overlay(out_path: str, layout: Dict[str, Any], grid_cfg: B2GridConfig, bev_grid: Dict[str, Any]) -> None:
+    img = _render_grid_image(layout, grid_cfg, bev_grid)
     cv2.imwrite(out_path, img)
 
 
@@ -103,7 +108,41 @@ def _middle_frame(cap: cv2.VideoCapture):
     return frame
 
 
-def draw_cam_overlay(cam_result: Dict[str, Any], video_path: str, out_path: str, vis_cfg: VisConfig) -> None:
+def _project_world_points(H_w2p: np.ndarray, pts_world: np.ndarray) -> np.ndarray:
+    ones = np.ones((pts_world.shape[0], 1), np.float32)
+    wh = np.concatenate([pts_world.astype(np.float32), ones], axis=1)
+    ph = (H_w2p @ wh.T).T
+    return ph[:, :2] / (ph[:, 2:3] + 1e-12)
+
+
+def _draw_world_frame(img: np.ndarray, H_w2p: np.ndarray, world_bbox: Dict[str, float]) -> None:
+    """Draws the world bounding box and XY axes in pixel space."""
+    corners_w = np.array(
+        [
+            [world_bbox["x_min"], world_bbox["y_min"]],
+            [world_bbox["x_max"], world_bbox["y_min"]],
+            [world_bbox["x_max"], world_bbox["y_max"]],
+            [world_bbox["x_min"], world_bbox["y_max"]],
+        ],
+        np.float32,
+    )
+    corners_p = _project_world_points(H_w2p, corners_w)
+    pts = corners_p.reshape((-1, 1, 2)).astype(np.int32)
+    cv2.polylines(img, [pts], True, (80, 180, 80), 2, cv2.LINE_AA)
+
+    origin_p = _project_world_points(H_w2p, np.array([[0.0, 0.0]], np.float32))[0]
+    x_axis = _project_world_points(H_w2p, np.array([[max(1.0, world_bbox["x_max"] * 0.2), 0.0]], np.float32))[0]
+    y_axis = _project_world_points(H_w2p, np.array([[0.0, max(1.0, abs(world_bbox["y_max"]) * 0.6)]], np.float32))[0]
+
+    origin_i = tuple(np.round(origin_p).astype(int))
+    cv2.drawMarker(img, origin_i, (0, 0, 0), markerType=cv2.MARKER_CROSS, markerSize=10, thickness=2, line_type=cv2.LINE_AA)
+    cv2.arrowedLine(img, origin_i, tuple(np.round(x_axis).astype(int)), (0, 0, 255), 2, cv2.LINE_AA, tipLength=0.08)
+    cv2.putText(img, "X+", tuple(np.round(x_axis + [6, -6]).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+    cv2.arrowedLine(img, origin_i, tuple(np.round(y_axis).astype(int)), (255, 0, 0), 2, cv2.LINE_AA, tipLength=0.08)
+    cv2.putText(img, "Y+", tuple(np.round(y_axis + [6, -6]).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2, cv2.LINE_AA)
+
+
+def draw_cam_overlay(cam_result: Dict[str, Any], video_path: str, out_path: str, vis_cfg: VisConfig, world_bbox: Dict[str, float]) -> None:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
@@ -116,6 +155,9 @@ def draw_cam_overlay(cam_result: Dict[str, Any], video_path: str, out_path: str,
 
     img = frame.copy()
     h, w = img.shape[:2]
+
+    H_w2p = np.asarray(cam_result.get("H_w2p"), np.float32)
+    _draw_world_frame(img, H_w2p, world_bbox)
 
     # all poles
     if vis_cfg.draw_all_poles:
@@ -136,6 +178,28 @@ def draw_cam_overlay(cam_result: Dict[str, Any], video_path: str, out_path: str,
                             (0, 0, 255), 2, cv2.LINE_AA)
 
     cv2.imwrite(out_path, img)
+
+
+def draw_cam1_bev(out_path: str, cam_result: Dict[str, Any], video_path: str, bev_grid: Dict[str, Any], grid_cfg: B2GridConfig, layout: Dict[str, Any]) -> None:
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {video_path}")
+
+    frame = _middle_frame(cap)
+    cap.release()
+
+    H_p2w = np.asarray(cam_result.get("H_p2w"), np.float32)
+    W2G = np.asarray(bev_grid["W2G"], np.float32)
+    canvas = bev_grid["canvas_size_px"]
+
+    M = W2G @ H_p2w
+    bev_img = cv2.warpPerspective(frame, M, (int(canvas["width"]), int(canvas["height"])), flags=cv2.INTER_LINEAR)
+
+    grid_img = _render_grid_image(layout, grid_cfg, bev_grid) if isinstance(grid_cfg, B2GridConfig) else None
+    if grid_img is not None:
+        bev_img = cv2.addWeighted(bev_img, 0.7, grid_img, 0.3, 0)
+
+    cv2.imwrite(out_path, bev_img)
 
 
 def draw_bev_observed(out_path: str, b1_result: Dict[str, Any], bev_grid: Dict[str, Any]) -> None:

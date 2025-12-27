@@ -8,7 +8,7 @@ import os
 from b2_config import load_b2_config
 from b2_core import assemble_bundle, compute_bev_grid, compute_world_bbox
 from b2_io import ensure_b2_output_dir, read_b1_result, write_json
-from b2_vis import draw_bev_observed, draw_cam_overlay, draw_grid_overlay
+from b2_vis import draw_bev_observed, draw_cam1_bev, draw_cam_overlay, draw_grid_overlay
 
 
 def main():
@@ -57,9 +57,14 @@ def main():
 
         cam1_path = os.path.join(out_dir, "cam1_overlay.png")
         cam2_path = os.path.join(out_dir, "cam2_overlay.png")
-        draw_cam_overlay(b1_res["cameras"]["cam1"], cfg.videos.cam1_path, cam1_path, cfg.vis)
-        draw_cam_overlay(b1_res["cameras"]["cam2"], cfg.videos.cam2_path, cam2_path, cfg.vis)
+        draw_cam_overlay(b1_res["cameras"]["cam1"], cfg.videos.cam1_path, cam1_path, cfg.vis, world_bbox)
+        draw_cam_overlay(b1_res["cameras"]["cam2"], cfg.videos.cam2_path, cam2_path, cfg.vis, world_bbox)
         print(f"Camera overlays written to {cam1_path} and {cam2_path}")
+
+        if cfg.vis.emit_cam1_bev:
+            cam1_bev_path = os.path.join(out_dir, "cam1_bev.png")
+            draw_cam1_bev(cam1_bev_path, b1_res["cameras"]["cam1"], cfg.videos.cam1_path, bev_grid, cfg.b2_grid, b1_res["layout"])
+            print(f"cam1_bev.png written to {cam1_bev_path}")
 
         if cfg.vis.emit_bev_observed:
             bev_path = os.path.join(out_dir, "bev_observed.png")

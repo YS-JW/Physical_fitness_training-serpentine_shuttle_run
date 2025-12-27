@@ -52,6 +52,7 @@ class VisConfig:
     draw_all_poles: bool = True
     draw_observed: bool = True
     emit_bev_observed: bool = False
+    emit_cam1_bev: bool = True
 
 
 @dataclass(frozen=True)
