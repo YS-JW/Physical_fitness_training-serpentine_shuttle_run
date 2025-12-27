@@ -57,54 +57,36 @@ def _read_first_frame(video_path: str):
 # -----------------------------
 def _draw_joint_on_cam(
     frame_bgr: np.ndarray,
-    obs: CamObs,
-    joint_cam_sol,   # JointSolution.cam1 or cam2 (CamSolution)
+    cam_res,
     color_obs=(0, 255, 0),
     color_miss=(0, 0, 255),
 ) -> None:
     """
-    Draw final JOINT result on this camera frame:
+    Draw final joint result on this camera frame using the resolved CameraCalibResult:
 
-    - Observed + inlier: draw at observed pixel (green circle + Pid)
-    - Missing: draw predicted pixel from homography projection (red cross + Pid)
-    - Outlier obs: skip (avoid "floating points")
+    - Observed pid: green circle + label
+    - Missing pid: red cross + label
     """
     h, w = frame_bgr.shape[:2]
 
-    cand = joint_cam_sol.candidate
-    fit = joint_cam_sol.fit
-
-    # 1) draw observed inliers at obs pixels
-    for i, (px, pid) in enumerate(zip(obs.poles_px, cand.pole_ids_in_obs_order)):
-        pid = int(pid)
-        if pid <= 0:
-            continue
-        if i >= len(fit.inlier_mask_obs) or (not fit.inlier_mask_obs[i]):
-            continue  # skip outliers
-
-        x, y = float(px[0]), float(px[1])
+    for pid in sorted(cam_res.poles_px.keys()):
+        x, y = cam_res.poles_px[pid]
         if not _in_bounds(x, y, w, h):
             continue
 
         xi, yi = int(round(x)), int(round(y))
-        cv2.circle(frame_bgr, (xi, yi), 7, color_obs, -1)
-        cv2.putText(frame_bgr, f"P{pid}", (xi + 10, yi - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, color_obs, 2, cv2.LINE_AA)
+        if pid in cam_res.observed_px:
+            cv2.circle(frame_bgr, (xi, yi), 7, color_obs, -1)
+            cv2.putText(frame_bgr, f"P{pid}", (xi + 10, yi - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, color_obs, 2, cv2.LINE_AA)
+        else:
+            cv2.drawMarker(frame_bgr, (xi, yi), color_miss, markerType=cv2.MARKER_TILTED_CROSS,
+                           markerSize=18, thickness=2, line_type=cv2.LINE_AA)
+            cv2.putText(frame_bgr, f"P{pid}", (xi + 10, yi - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, color_miss, 2, cv2.LINE_AA)
 
-    # 2) draw missing as predicted pixels (template -> pixel via H_w2p)
-    for pid, (x, y) in joint_cam_sol.pred_px_missing.items():
-        x, y = float(x), float(y)
-        if not _in_bounds(x, y, w, h):
-            continue
-        xi, yi = int(round(x)), int(round(y))
-        cv2.drawMarker(frame_bgr, (xi, yi), color_miss, markerType=cv2.MARKER_TILTED_CROSS,
-                       markerSize=18, thickness=2, line_type=cv2.LINE_AA)
-        cv2.putText(frame_bgr, f"P{int(pid)}", (xi + 10, yi - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, color_miss, 2, cv2.LINE_AA)
-
-    # header line
     cv2.putText(frame_bgr,
-                f"{obs.cam_id} (green=inlier obs, red=missing)  inliers={joint_cam_sol.fit.inliers}/{joint_cam_sol.fit.total}",
+                f"{cam_res.cam_id} (green=observed, red=missing)",
                 (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (20, 20, 20), 2, cv2.LINE_AA)
 
 
@@ -113,9 +95,8 @@ def _draw_joint_on_cam(
 # -----------------------------
 def _render_joint_bev(
     layout: LayoutSpec,
-    joint: JointSolution,
-    cam1_obs: CamObs,
-    cam2_obs: CamObs,
+    cam1_res,
+    cam2_res,
     width: int = 700,
     height: int = 540,
     ppm: float = 18.0,
@@ -145,24 +126,15 @@ def _render_joint_bev(
         cv2.putText(img, f"P{pid}", (u + 10, v - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 0), 2, cv2.LINE_AA)
 
-    # cam points in world (use inlier obs only)
-    def pid_world_map(obs: CamObs, sol) -> Dict[int, np.ndarray]:
+    def pid_world_map(cam_res) -> Dict[int, np.ndarray]:
         out: Dict[int, np.ndarray] = {}
-        cand = sol.candidate
-        fit = sol.fit
-        for i, pid in enumerate(cand.pole_ids_in_obs_order):
-            pid = int(pid)
-            if pid <= 0:
-                continue
-            if i >= len(fit.inlier_mask_obs) or (not fit.inlier_mask_obs[i]):
-                continue
-            px = np.asarray([obs.poles_px[i]], np.float32)
-            wxy = _apply_H(fit.H_p2w, px)[0]
-            out[pid] = wxy
+        for pid, px in cam_res.observed_px.items():
+            wxy = _apply_H(cam_res.H_p2w, np.asarray([px], np.float32))[0]
+            out[int(pid)] = wxy
         return out
 
-    d1 = pid_world_map(cam1_obs, joint.cam1)
-    d2 = pid_world_map(cam2_obs, joint.cam2)
+    d1 = pid_world_map(cam1_res)
+    d2 = pid_world_map(cam2_res)
 
     # draw cam1 points (green-ish)
     for pid, wxy in d1.items():
@@ -182,13 +154,14 @@ def _render_joint_bev(
         cv2.line(img, (u1, v1), (u2, v2), (0, 160, 200), 2, cv2.LINE_AA)
 
     # title
+    coverage = len(set(d1.keys()) | set(d2.keys()))
     cv2.putText(img, "Joint BEV (canonical world)", (12, 32),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (30, 30, 30), 2, cv2.LINE_AA)
-    cv2.putText(img, f"coverage={joint.coverage}/7 union={joint.union_ids}", (12, 62),
+    cv2.putText(img, f"coverage={coverage}/7", (12, 62),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.75, (40, 40, 40), 2, cv2.LINE_AA)
     cv2.putText(img,
-                f"shared={joint.shared_count} mean={joint.shared_world_err_mean_m:.3f}m max={joint.shared_world_err_max_m:.3f}m",
-                (12, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (40, 40, 40), 2, cv2.LINE_AA)
+                f"shared={len(shared)}", (12, 90),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.70, (40, 40, 40), 2, cv2.LINE_AA)
 
     # legend
     cv2.circle(img, (20, height - 70), 6, (0, 180, 0), -1)
@@ -407,26 +380,6 @@ if __name__ == "__main__":
     print(f"\nB1 result written to: {out_path}")
 
     if args.show:
-        # Rebuild obs for drawing (same as run_b1)
-        cam1_obs = CamObs(
-            "cam1",
-            "start",
-            res.poles_cam1.poles_px,
-            area=res.poles_cam1.pole_area,
-            count=res.poles_cam1.pole_count,
-            mad_px=res.poles_cam1.pole_spread_mad_px,
-            meta=res.poles_cam1.meta,
-        )
-        cam2_obs = CamObs(
-            "cam2",
-            "end",
-            res.poles_cam2.poles_px,
-            area=res.poles_cam2.pole_area,
-            count=res.poles_cam2.pole_count,
-            mad_px=res.poles_cam2.pole_spread_mad_px,
-            meta=res.poles_cam2.meta,
-        )
-
         ok1, f1 = _read_first_frame(args.cam1)
         ok2, f2 = _read_first_frame(args.cam2)
 
@@ -435,15 +388,15 @@ if __name__ == "__main__":
 
         if ok1:
             vis1 = f1.copy()
-            _draw_joint_on_cam(vis1, cam1_obs, res.joint.cam1)
+            _draw_joint_on_cam(vis1, res.joint.cam1)
             panels.append(vis1)
 
         if ok2:
             vis2 = f2.copy()
-            _draw_joint_on_cam(vis2, cam2_obs, res.joint.cam2)
+            _draw_joint_on_cam(vis2, res.joint.cam2)
             panels.append(vis2)
 
-        bev = _render_joint_bev(res.layout, res.joint, cam1_obs, cam2_obs, width=700, height=540, ppm=18.0)
+        bev = _render_joint_bev(res.layout, res.joint.cam1, res.joint.cam2, width=700, height=540, ppm=18.0)
         panels.append(bev)
 
         resized = []
