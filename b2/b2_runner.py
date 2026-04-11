@@ -1,5 +1,3 @@
-# b2_runner.py
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import argparse
@@ -63,12 +61,15 @@ def main():
 
         if cfg.vis.emit_cam1_bev:
             cam1_bev_path = os.path.join(out_dir, "cam1_bev.png")
-            draw_cam1_bev(cam1_bev_path, b1_res["cameras"]["cam1"], cfg.videos.cam1_path, bev_grid, cfg.b2_grid, b1_res["layout"])
+            draw_cam1_bev(cam1_bev_path, b1_res["cameras"]["cam1"], cfg.videos.cam1_path, bev_grid, cfg.b2_grid,
+                          b1_res["layout"])
             print(f"cam1_bev.png written to {cam1_bev_path}")
 
         if cfg.vis.emit_bev_observed:
             bev_path = os.path.join(out_dir, "bev_observed.png")
             draw_bev_observed(bev_path, b1_res, bev_grid)
             print(f"bev_observed.png written to {bev_path}")
+
+
 if __name__ == "__main__":
     main()

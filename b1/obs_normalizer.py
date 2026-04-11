@@ -1,6 +1,4 @@
-# obs_normalizer.py
 # python .\obs_normalizer.py --cfg .\b1_config.json --video "..\正常跑1 20.6s\正常跑前视角-1.mp4" --show
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import argparse

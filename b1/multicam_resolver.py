@@ -1,6 +1,4 @@
-# multicam_resolver.py
 # python .\multicam_resolver.py --cfg .\b1_config.json --cam1 '..\正常跑1 20.6s\正常跑前视角-1.mp4' --cam2 '..\正常跑1 20.6s\正常跑后视角.mp4' --show
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 """
@@ -53,8 +51,8 @@ class CameraCalibResult:
     H_p2w: np.ndarray  # (3,3) pixel -> canonical world
     H_w2p: np.ndarray  # (3,3) canonical world -> pixel
 
-    poles_px: Dict[int, Tuple[float, float]]      # pid=1..7 (always full)
-    observed_px: Dict[int, Tuple[float, float]]   # pid subset (actual detected points)
+    poles_px: Dict[int, Tuple[float, float]]  # pid=1..7 (always full)
+    observed_px: Dict[int, Tuple[float, float]]  # pid subset (actual detected points)
 
 
 @dataclass(frozen=True)
@@ -105,10 +103,10 @@ def _pid_to_obs_px(obs: CamObs, cand_ids_in_obs_order: List[int]) -> Dict[int, T
 
 
 def _shared_world_mean_err(
-    obs1: CamObs,
-    sol1: SingleCamSolution,
-    obs2: CamObs,
-    sol2: SingleCamSolution,
+        obs1: CamObs,
+        sol1: SingleCamSolution,
+        obs2: CamObs,
+        sol2: SingleCamSolution,
 ) -> Tuple[float, float, int]:
     """
     Compare world coords (via each camera's H_p2w) for shared PIDs.
@@ -158,17 +156,17 @@ def _build_cam_result(obs: CamObs, sol: SingleCamSolution, layout: LayoutSpec) -
 # Public API
 # -----------------------------
 def solve_two_cam(
-    obs1: CamObs,
-    obs2: CamObs,
-    layout: LayoutSpec,
-    topk_candidates: int,
-    ransac_th_px: float,
-    *,
-    coverage_penalty_m: float = 0.15,
-    shared_consistency_w: float = 0.30,
-    min_coverage: int = 4,
-    max_return_per_cam: int = 20,
-    return_debug: bool = False,
+        obs1: CamObs,
+        obs2: CamObs,
+        layout: LayoutSpec,
+        topk_candidates: int,
+        ransac_th_px: float,
+        *,
+        coverage_penalty_m: float = 0.15,
+        shared_consistency_w: float = 0.30,
+        min_coverage: int = 4,
+        max_return_per_cam: int = 20,
+        return_debug: bool = False,
 ) -> MultiCamResult | Tuple[MultiCamResult, dict]:
     """
     Two-camera joint selection.
@@ -233,7 +231,7 @@ def solve_two_cam(
 
             # tie-break: prefer larger coverage, then smaller shared_mean
             if (score < best_score) or (abs(score - best_score) < 1e-9 and coverage > best_cov) or (
-                abs(score - best_score) < 1e-9 and coverage == best_cov and shared_mean < best_shared[0]
+                    abs(score - best_score) < 1e-9 and coverage == best_cov and shared_mean < best_shared[0]
             ):
                 best_score = score
                 best_pair = (s1, s2)
@@ -446,10 +444,13 @@ if __name__ == "__main__":
 
         # unify height then concat
         target_h = 720
+
+
         def _resize_to_h(img):
             h, w = img.shape[:2]
             s = target_h / float(h)
             return cv2.resize(img, (int(round(w * s)), target_h))
+
 
         canvas = cv2.hconcat([_resize_to_h(vis1), _resize_to_h(vis2)])
         cv2.imshow("multicam_resolver (joint P1..P7 projection)", canvas)

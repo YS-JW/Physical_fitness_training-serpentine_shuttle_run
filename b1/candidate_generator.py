@@ -1,6 +1,4 @@
-# candidate_generator.py
 # python .\candidate_generator.py --cfg .\b1_config.json --video '..\正常跑1 20.6s\正常跑前视角-1.mp4' --role start --cam-id cam1 --show --show-norm
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 """
@@ -28,7 +26,6 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import cv2
 
-# ---- depends on your obs_normalizer.py ----
 from obs_normalizer import (
     PoleDetections,
     pole_setpx_to_detections,
@@ -38,16 +35,16 @@ from obs_normalizer import (
 
 
 # -----------------------------
-# Public types (used by other modules)
+# Public types
 # -----------------------------
 @dataclass(frozen=True)
 class CamObs:
     cam_id: str
     role: str  # "start" | "end"
-    poles_px: List[Tuple[float, float]]  # unordered allowed
-    area: Optional[List[float]] = None  # same length as poles_px
-    count: Optional[List[int]] = None  # same length as poles_px
-    mad_px: Optional[List[float]] = None  # same length as poles_px
+    poles_px: List[Tuple[float, float]]
+    area: Optional[List[float]] = None
+    count: Optional[List[int]] = None
+    mad_px: Optional[List[float]] = None
     meta: Optional[Dict[str, float]] = None
 
 
@@ -150,9 +147,6 @@ def _linear_fit_cost(t_all: np.ndarray, x_all: np.ndarray) -> float:
     return float(rmse / step)
 
 def _missing_role_cost(missing_ids: List[int], role: str, N: int) -> float:
-    # N=7
-    # start: 缺得越远越合理 -> 代价越小
-    # end  : 缺得越近越合理 -> 代价越小
     if not missing_ids:
         return 0.0
     if role == "start":
@@ -174,7 +168,7 @@ def generate_id_candidates(
 ) -> List[IdCandidate]:
     """
     Input:
-      obs: one camera detections (unordered)
+      obs: one camera detections
       layout: canonical layout spec
     Output:
       sorted list of IdCandidate (ascending score)
@@ -214,8 +208,8 @@ def generate_id_candidates(
     N = int(layout.n_poles)
 
     # scoring weights (simple + stable, does NOT force P1/P2 presence)
-    w_missing_cnt = 0.2  # 缺几根（现在多数情况是常数，可设很小）
-    w_missing_role = 1.2  # 缺哪根（关键）
+    w_missing_cnt = 0.2
+    w_missing_role = 1.2
     w_gap = 0.8
     w_lin = 0.6
 
@@ -245,7 +239,7 @@ def generate_id_candidates(
             miss_cnt = float(len(missing))
             miss_role = _missing_role_cost(missing, obs.role, N)
 
-            # column gap costs (sign-free)
+            # column gap costs
             gapL = _gap_cost_abs(L_t, list(map(int, L_ids)))
             gapR = _gap_cost_abs(R_t, list(map(int, R_ids)))
 
@@ -409,7 +403,6 @@ if __name__ == "__main__":
         start_sec = 0.0
     frame_sec = float(start_sec + 0.5 * sample_secs)
 
-    # show normalization overlay if needed
     if args.show_norm:
         frame0 = _read_frame_at_sec(args.video, frame_sec)
         norm = normalize_obs_xsweep(_obs_to_detections(obs), min_per_col=2, imbalance_penalty_px=2.0, robust="median")

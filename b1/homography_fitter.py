@@ -1,6 +1,4 @@
-# homography_fitter.py
 # python .\homography_fitter.py --cfg .\b1_config.json --video '..\正常跑1 20.6s\正常跑后视角.mp4' --role end --show
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 """
@@ -60,7 +58,7 @@ class HomographyFit:
 class SingleCamSolution:
     cand: IdCandidate
     fit: HomographyFit
-    score: float   # lower is better
+    score: float  # lower is better
 
 
 # -----------------------------
@@ -76,9 +74,9 @@ def _apply_H(H: np.ndarray, pts_xy: np.ndarray) -> np.ndarray:
 
 
 def _corr_from_obs_and_candidate(
-    obs: CamObs,
-    cand: IdCandidate,
-    layout: LayoutSpec,
+        obs: CamObs,
+        cand: IdCandidate,
+        layout: LayoutSpec,
 ) -> Tuple[np.ndarray, np.ndarray, List[int], List[int]]:
     """
     Build correspondences for homography.
@@ -145,12 +143,12 @@ def _degeneracy_check(world_xy: np.ndarray, pixel_xy: np.ndarray) -> None:
 # Core API
 # -----------------------------
 def fit_homography_ransac(
-    obs: CamObs,
-    cand: IdCandidate,
-    layout: LayoutSpec,
-    ransac_th_px: float,
-    max_iters: int = 4000,
-    confidence: float = 0.995,
+        obs: CamObs,
+        cand: IdCandidate,
+        layout: LayoutSpec,
+        ransac_th_px: float,
+        max_iters: int = 4000,
+        confidence: float = 0.995,
 ) -> HomographyFit:
     """
     Fit homography with RANSAC.
@@ -219,25 +217,16 @@ def fit_homography_ransac(
         reproj_max_m=reproj_max_m,
     )
 
-def _missing_role_cost(missing_ids: List[int], role: str, n_poles: int) -> float:
-    """
-    越小越“合理”。
 
-    一个可用的默认：缺远端更合理（cost小）
-      - start 相机：远端是大 pid（P7），所以 missing pid 越大 cost 越小
-      - end   相机：远端是小 pid（P1），所以 missing pid 越小 cost 越小
-    """
+def _missing_role_cost(missing_ids: List[int], role: str, n_poles: int) -> float:
     if not missing_ids:
         return 0.0
     N = float(n_poles)
 
     if role == "start":
-        # pid 大 -> 更远 -> 更合理 -> cost 小
         return float(np.mean([(N + 1.0 - float(pid)) / N for pid in missing_ids]))
     else:  # "end"
-        # pid 小 -> 更远 -> 更合理 -> cost 小
         return float(np.mean([float(pid) / N for pid in missing_ids]))
-
 
 
 def _solution_score(cand: IdCandidate, fit: HomographyFit, role: str, n_poles: int) -> float:
@@ -261,13 +250,12 @@ def _solution_score(cand: IdCandidate, fit: HomographyFit, role: str, n_poles: i
     return geom + outlier_pen_m + prior_w_m * float(prior) - reward
 
 
-
 def fit_topk_solutions(
-    obs: CamObs,
-    layout: LayoutSpec,
-    topk_candidates: int,
-    ransac_th_px: float,
-    max_return: int = 20,
+        obs: CamObs,
+        layout: LayoutSpec,
+        topk_candidates: int,
+        ransac_th_px: float,
+        max_return: int = 20,
 ) -> List[SingleCamSolution]:
     """
     Convenience wrapper for multicam_resolver:
@@ -296,15 +284,15 @@ def fit_topk_solutions(
 # -----------------------------
 def project_all_poles_px(layout: LayoutSpec, H_w2p: np.ndarray) -> Dict[int, Tuple[float, float]]:
     W = layout.world_points()  # (7,2)
-    P = _apply_H(H_w2p, W)     # (7,2)
+    P = _apply_H(H_w2p, W)  # (7,2)
     return {pid: (float(P[pid - 1, 0]), float(P[pid - 1, 1])) for pid in range(1, layout.n_poles + 1)}
 
 
 def draw_solution_overlay(
-    frame_bgr: np.ndarray,
-    obs: CamObs,
-    sol: SingleCamSolution,
-    layout: LayoutSpec,
+        frame_bgr: np.ndarray,
+        obs: CamObs,
+        sol: SingleCamSolution,
+        layout: LayoutSpec,
 ) -> np.ndarray:
     """
     Overlay:

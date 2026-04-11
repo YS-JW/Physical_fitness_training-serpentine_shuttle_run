@@ -1,5 +1,3 @@
-# b1_pipeline.py
-# -*- coding: utf-8 -*-
 # Usage:
 #   python b1_pipeline.py --cfg b1_config.json --cam1 path/to/cam1.mp4 --cam2 path/to/cam2.mp4 --show
 #   python b1_pipeline.py --cfg b1_config.json --cam1 ... --cam2 ... --out-json out_b1.json
@@ -21,7 +19,7 @@ from pole_detector import YoloV5, PoleDetector
 
 from obs_normalizer import pole_setpx_to_detections
 from candidate_generator import CamObs, LayoutSpec
-from multicam_resolver import solve_two_cam  # 你现在的对外API应当是这个
+from multicam_resolver import solve_two_cam
 
 
 # -----------------------------
@@ -53,10 +51,6 @@ def _apply_H(H: np.ndarray, pts_xy: np.ndarray) -> np.ndarray:
 
 
 def _get_H_w2p_from_joint(joint, which: str) -> np.ndarray:
-    """
-    从 multicam_resolver 的返回对象里拿 H_w2p（world->pixel）。
-    允许几种常见命名，但探测不到就直接报错（不兜底）。
-    """
     candidates = []
     if which == "cam1":
         candidates = [
@@ -81,7 +75,7 @@ def _get_H_w2p_from_joint(joint, which: str) -> np.ndarray:
                 raise RuntimeError(f"{which}: {name} shape invalid: {H.shape}, expect (3,3)")
             return H
 
-    # 也支持 joint.cam1.fit.H_w2p / joint.cam2.fit.H_w2p 这种结构
+
     if hasattr(joint, which):
         obj = getattr(joint, which)
         # cam?.fit.H_w2p
@@ -104,7 +98,6 @@ def _get_H_w2p_from_joint(joint, which: str) -> np.ndarray:
 
 
 def _pick_vis_frame_sec_from_cfg(cfg) -> float:
-    # 和 detector 的采样窗口对齐：窗口中心帧
     window_mode = str(getattr(cfg.pole_detector, "window_mode", "start")).lower()
     sample_secs = float(getattr(cfg.pole_detector, "sample_secs", 0.0))
     if sample_secs <= 0:
@@ -256,7 +249,6 @@ def main():
     proj_cam1 = {pid: (float(P1[pid - 1, 0]), float(P1[pid - 1, 1])) for pid in range(1, 8)}
     proj_cam2 = {pid: (float(P2[pid - 1, 0]), float(P2[pid - 1, 1])) for pid in range(1, 8)}
 
-    # console summary (results only)
     print("\n========== B1 FINAL ==========")
     for pid in range(1, 8):
         xw, yw = float(W[pid - 1, 0]), float(W[pid - 1, 1])
@@ -264,7 +256,6 @@ def main():
         x2, y2 = proj_cam2[pid]
         print(f"P{pid}: world=({xw:.3f},{yw:.3f})  cam1_px=({x1:.1f},{y1:.1f})  cam2_px=({x2:.1f},{y2:.1f})")
 
-    # export json (results only)
     if args.out_json:
         out = {
             "layout": {
@@ -296,7 +287,6 @@ def main():
         vis2 = _draw_projection(f2, proj_cam2, "cam2 projection of P1..P7 (from joint)")
         bev = _render_bev(layout, H_p2w_1, obs1.poles_px, H_p2w_2, obs2.poles_px)
 
-        # concat to one canvas
         target_h = 540
         panels = [vis1, vis2, bev]
         resized = []

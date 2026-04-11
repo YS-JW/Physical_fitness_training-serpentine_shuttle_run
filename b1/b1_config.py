@@ -1,6 +1,3 @@
-# b1_config.py
-# python b1_config.py --init b1_config.json
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json

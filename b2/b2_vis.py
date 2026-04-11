@@ -1,5 +1,3 @@
-# b2_vis.py
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from typing import Dict, Any
@@ -135,14 +133,18 @@ def _draw_world_frame(img: np.ndarray, H_w2p: np.ndarray, world_bbox: Dict[str, 
     y_axis = _project_world_points(H_w2p, np.array([[0.0, max(1.0, abs(world_bbox["y_max"]) * 0.6)]], np.float32))[0]
 
     origin_i = tuple(np.round(origin_p).astype(int))
-    cv2.drawMarker(img, origin_i, (0, 0, 0), markerType=cv2.MARKER_CROSS, markerSize=10, thickness=2, line_type=cv2.LINE_AA)
+    cv2.drawMarker(img, origin_i, (0, 0, 0), markerType=cv2.MARKER_CROSS, markerSize=10, thickness=2,
+                   line_type=cv2.LINE_AA)
     cv2.arrowedLine(img, origin_i, tuple(np.round(x_axis).astype(int)), (0, 0, 255), 2, cv2.LINE_AA, tipLength=0.08)
-    cv2.putText(img, "X+", tuple(np.round(x_axis + [6, -6]).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+    cv2.putText(img, "X+", tuple(np.round(x_axis + [6, -6]).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2,
+                cv2.LINE_AA)
     cv2.arrowedLine(img, origin_i, tuple(np.round(y_axis).astype(int)), (255, 0, 0), 2, cv2.LINE_AA, tipLength=0.08)
-    cv2.putText(img, "Y+", tuple(np.round(y_axis + [6, -6]).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(img, "Y+", tuple(np.round(y_axis + [6, -6]).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2,
+                cv2.LINE_AA)
 
 
-def draw_cam_overlay(cam_result: Dict[str, Any], video_path: str, out_path: str, vis_cfg: VisConfig, world_bbox: Dict[str, float]) -> None:
+def draw_cam_overlay(cam_result: Dict[str, Any], video_path: str, out_path: str, vis_cfg: VisConfig,
+                     world_bbox: Dict[str, float]) -> None:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
@@ -180,7 +182,8 @@ def draw_cam_overlay(cam_result: Dict[str, Any], video_path: str, out_path: str,
     cv2.imwrite(out_path, img)
 
 
-def draw_cam1_bev(out_path: str, cam_result: Dict[str, Any], video_path: str, bev_grid: Dict[str, Any], grid_cfg: B2GridConfig, layout: Dict[str, Any]) -> None:
+def draw_cam1_bev(out_path: str, cam_result: Dict[str, Any], video_path: str, bev_grid: Dict[str, Any],
+                  grid_cfg: B2GridConfig, layout: Dict[str, Any]) -> None:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")

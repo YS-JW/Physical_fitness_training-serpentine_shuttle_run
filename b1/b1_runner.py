@@ -1,5 +1,3 @@
-# b1_runner.py
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import argparse
@@ -18,9 +16,6 @@ from candidate_generator import CamObs, LayoutSpec
 from multicam_resolver import MultiCamResult, solve_two_cam
 
 
-# -----------------------------
-# Result bundle
-# -----------------------------
 @dataclass(frozen=True)
 class B1RunResult:
     poles_cam1: PoleDetections
@@ -30,9 +25,6 @@ class B1RunResult:
     metrics: Optional[dict] = None
 
 
-# -----------------------------
-# Small helpers
-# -----------------------------
 def _apply_H(H: np.ndarray, pts_xy: np.ndarray) -> np.ndarray:
     pts = np.asarray(pts_xy, np.float32)
     ones = np.ones((pts.shape[0], 1), np.float32)
@@ -52,21 +44,12 @@ def _read_first_frame(video_path: str):
     return ok, frame
 
 
-# -----------------------------
-# Drawing: overlay joint result on one camera
-# -----------------------------
 def _draw_joint_on_cam(
     frame_bgr: np.ndarray,
     cam_res,
     color_obs=(0, 255, 0),
     color_miss=(0, 0, 255),
 ) -> None:
-    """
-    Draw final joint result on this camera frame using the resolved CameraCalibResult:
-
-    - Observed pid: green circle + label
-    - Missing pid: red cross + label
-    """
     h, w = frame_bgr.shape[:2]
 
     for pid in sorted(cam_res.poles_px.keys()):
@@ -193,14 +176,12 @@ def _layout_from_cfg(cfg) -> LayoutSpec:
     stagger = float(_require(lay, "stagger_m", "cfg.layout"))
     lat_gap = float(_require(lay, "lat_gap_m", "cfg.layout"))
 
-    # 严格一致性：交错布局下应满足同列间距 = 2 * stagger
     if abs(same_col - 2.0 * stagger) > 1e-6:
         raise ValueError(
             f"layout inconsistent: expected same_col_step_m == 2*stagger_m, "
             f"got same_col_step_m={same_col}, stagger_m={stagger}"
         )
 
-    # LayoutSpec.step_x 就是 P1->P2 的步长（等于 stagger_m）
     return LayoutSpec(n_poles=n_poles, stagger_m=stagger, lat_gap_m=lat_gap)
 
 
@@ -210,7 +191,6 @@ def _solver_params_from_cfg(cfg) -> tuple[int, float]:
     topk = int(_require(mc, "topk_single", "cfg.multicam_resolver"))
     thpx = float(_require(mc, "ransac_th_px", "cfg.multicam_resolver"))
 
-    # 角色也严格校验（你已在 _validate 做过，这里再兜一层）
     cam1_role = str(_require(mc, "cam1_role", "cfg.multicam_resolver"))
     cam2_role = str(_require(mc, "cam2_role", "cfg.multicam_resolver"))
     if cam1_role != "start" or cam2_role != "end":
